@@ -1,6 +1,4 @@
-# Streamlit Cloud Requirements
-# Для развёртывания на share.streamlit.io
-
+# Streamlit Cloud (face_recognition недоступен)
 streamlit>=1.28.0
 ultralytics>=8.0.0
 opencv-python-headless>=4.8.0

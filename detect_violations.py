@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Tuple, Optional
 import os
 
-# Suppress TensorFlow warnings before importing DeepFace
+# Suppress TensorFlow/CUDA warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 from ultralytics import YOLO
@@ -19,45 +19,33 @@ import argparse
 import config
 from tqdm import tqdm
 
-# Выбор бэкенда для распознавания лиц
-# Приоритет: OpenCV (всегда работает) -> DeepFace -> face_recognition
-FACE_BACKEND = "opencv"  # opencv, deepface, dlib
+# Распознавание лиц (face_recognition/dlib)
+FACE_BACKEND = "none"
 
 try:
-    from face_database_opencv import FaceDatabase
-    FACE_BACKEND = "opencv"
-    print("Используется OpenCV для распознавания лиц (Haar + HOG)")
+    from face_database import FaceDatabase
+    import face_recognition
+    FACE_BACKEND = "dlib"
+    print("Используется face_recognition (dlib) для распознавания лиц")
 except ImportError:
-    try:
-        from face_database_deepface import FaceDatabase
-        FACE_BACKEND = "deepface"
-        print("Используется DeepFace для распознавания лиц")
-    except ImportError:
-        try:
-            from face_database import FaceDatabase
-            import face_recognition
-            FACE_BACKEND = "dlib"
-            print("Используется face_recognition (dlib) для распознавания лиц")
-        except ImportError:
-            # Fallback - создаём заглушку
-            FACE_BACKEND = "none"
-            print("ВНИМАНИЕ: Распознавание лиц недоступно!")
-            
-            class FaceDatabase:
-                def __init__(self, *args, **kwargs):
-                    self.face_encodings = {}
-                def detect_faces(self, frame):
-                    return []
-                def recognize_faces_in_frame(self, frame, threshold=None):
-                    return []
-                def recognize_face(self, embedding, threshold=None):
-                    return "Unknown", 1.0
-                def list_persons(self):
-                    return []
-                def save_database(self):
-                    pass
-                def load_database(self):
-                    pass
+    # Fallback - создаём заглушку
+    print("ВНИМАНИЕ: face_recognition не установлен. Распознавание лиц недоступно!")
+    
+    class FaceDatabase:
+        def __init__(self, *args, **kwargs):
+            self.face_encodings = {}
+        def detect_faces(self, frame):
+            return []
+        def recognize_faces_in_frame(self, frame, threshold=None):
+            return []
+        def recognize_face(self, embedding, threshold=None):
+            return "Unknown", 1.0
+        def list_persons(self):
+            return []
+        def save_database(self):
+            pass
+        def load_database(self):
+            pass
 
 
 class ViolationDetector:
@@ -182,7 +170,7 @@ class ViolationDetector:
         # который есть во всех версиях FaceDatabase
         try:
             if hasattr(self.face_db, 'recognize_faces_in_frame'):
-                # Новый унифицированный интерфейс (OpenCV/DeepFace)
+                # Унифицированный интерфейс FaceDatabase
                 faces = self.face_db.recognize_faces_in_frame(frame)
                 
                 for face in faces:

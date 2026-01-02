@@ -1,6 +1,6 @@
 """
 🎯 Веб-интерфейс системы мониторинга дисциплины
-Streamlit приложение с детекцией нарушений и распознаванием лиц (DeepFace)
+Streamlit приложение с детекцией нарушений и распознаванием лиц
 """
 import streamlit as st
 import cv2
@@ -29,26 +29,18 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import config
 from ultralytics import YOLO
 
-# Попытка импорта DeepFace для распознавания лиц
+# Импорт модуля распознавания лиц (face_recognition/dlib)
 FACE_RECOGNITION_AVAILABLE = False
 FaceDatabase = None
+FACE_BACKEND = "None"
 
 try:
-    from face_database_deepface import FaceDatabase
+    from face_database import FaceDatabase
+    import face_recognition
     FACE_RECOGNITION_AVAILABLE = True
-    FACE_BACKEND = "DeepFace"
+    FACE_BACKEND = "dlib"
 except ImportError:
-    try:
-        from face_database_opencv import FaceDatabase
-        FACE_RECOGNITION_AVAILABLE = True
-        FACE_BACKEND = "OpenCV"
-    except ImportError:
-        try:
-            from face_database import FaceDatabase
-            FACE_RECOGNITION_AVAILABLE = True
-            FACE_BACKEND = "dlib"
-        except ImportError:
-            FACE_BACKEND = "None"
+    print("ВНИМАНИЕ: face_recognition не установлен. Распознавание лиц недоступно.")
 
 
 # ==================== СТИЛИ ====================
@@ -197,7 +189,7 @@ def detect_and_recognize_faces(frame: np.ndarray, face_db, threshold: float = 0.
         if hasattr(face_db, 'recognize_faces_in_frame'):
             return face_db.recognize_faces_in_frame(frame, threshold)
         
-        # Fallback для DeepFace
+        # Fallback для альтернативных методов
         if hasattr(face_db, 'extract_embedding_from_frame'):
             results = []
             face_data = face_db.extract_embedding_from_frame(frame)
@@ -834,8 +826,15 @@ def render_face_database_page():
     
     if not FACE_RECOGNITION_AVAILABLE:
         st.error(f"❌ Face recognition unavailable. Backend: {FACE_BACKEND}")
-        st.info("Install: pip install deepface tensorflow")
+        st.info("Install: pip install face-recognition dlib")
         return
+    
+    # Кнопка перезагрузки базы
+    col_reload, col_info = st.columns([1, 3])
+    with col_reload:
+        if st.button("🔄 Reload Database"):
+            load_face_database.clear()
+            st.rerun()
     
     face_db = load_face_database()
     
@@ -843,8 +842,8 @@ def render_face_database_page():
         st.error("❌ Failed to load face database")
         return
     
-    # Информация о бэкенде
-    st.info(f"🔧 Backend: **{FACE_BACKEND}**")
+    with col_info:
+        st.info(f"🔧 Backend: **{FACE_BACKEND}**")
     
     # Список людей
     persons = face_db.list_persons()

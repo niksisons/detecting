@@ -78,18 +78,21 @@ class FaceDatabase:
         print(f"Added {added_count} images for {name}")
         return added_count
     
-    def recognize_face(self, face_encoding: np.ndarray) -> Tuple[str, float]:
+    def recognize_face(self, face_encoding: np.ndarray, threshold: float = None) -> Tuple[str, float]:
         """
         Recognize face by encoding
         
         Args:
             face_encoding: Face encoding
+            threshold: Recognition threshold (uses config default if None)
             
         Returns:
             Tuple[str, float]: (Name or "Unknown", distance)
         """
         if not self.face_encodings:
             return "Unknown", 1.0
+        
+        tolerance = threshold if threshold is not None else config.FACE_RECOGNITION_TOLERANCE
         
         # Compare with known faces
         min_distance = float('inf')
@@ -102,10 +105,88 @@ class FaceDatabase:
             
             if min_dist < min_distance:
                 min_distance = min_dist
-                if min_dist < config.FACE_RECOGNITION_TOLERANCE:
+                if min_dist < tolerance:
                     recognized_name = name
         
         return recognized_name, min_distance
+    
+    def recognize_faces_in_frame(self, frame: np.ndarray, threshold: float = None) -> List[Dict]:
+        """
+        Detect and recognize all faces in frame
+        
+        Args:
+            frame: BGR image (OpenCV format)
+            threshold: Recognition threshold
+            
+        Returns:
+            List of dicts with name, distance, confidence, bbox
+        """
+        # Convert BGR to RGB
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        # Resize for faster processing
+        scale = 1.0
+        height, width = rgb_frame.shape[:2]
+        if max(height, width) > 800:
+            scale = 800 / max(height, width)
+            small_frame = cv2.resize(rgb_frame, (0, 0), fx=scale, fy=scale)
+        else:
+            small_frame = rgb_frame
+        
+        # Detect faces
+        face_locations = face_recognition.face_locations(small_frame, model="hog")
+        
+        if not face_locations:
+            return []
+        
+        # Get encodings
+        face_encodings = face_recognition.face_encodings(small_frame, face_locations)
+        
+        results = []
+        for (top, right, bottom, left), encoding in zip(face_locations, face_encodings):
+            # Scale back to original size
+            top = int(top / scale)
+            right = int(right / scale)
+            bottom = int(bottom / scale)
+            left = int(left / scale)
+            
+            # Recognize
+            name, distance = self.recognize_face(encoding, threshold)
+            confidence = max(0, 1 - distance)
+            
+            results.append({
+                "name": name,
+                "distance": distance,
+                "confidence": confidence,
+                "bbox": (left, top, right, bottom),
+                "encoding": encoding
+            })
+        
+        return results
+    
+    def detect_faces(self, frame: np.ndarray) -> List[Tuple[int, int, int, int]]:
+        """
+        Detect faces in frame (without recognition)
+        
+        Returns:
+            List of bboxes (left, top, right, bottom)
+        """
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        # Resize for speed
+        scale = 1.0
+        height, width = rgb_frame.shape[:2]
+        if max(height, width) > 800:
+            scale = 800 / max(height, width)
+            small_frame = cv2.resize(rgb_frame, (0, 0), fx=scale, fy=scale)
+        else:
+            small_frame = rgb_frame
+        
+        face_locations = face_recognition.face_locations(small_frame, model="hog")
+        
+        # Scale back
+        return [(int(left/scale), int(top/scale), int(right/scale), int(bottom/scale)) 
+                for top, right, bottom, left in face_locations]
     
     def save_database(self):
         """Save database to disk"""
