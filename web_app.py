@@ -135,7 +135,9 @@ def init_session_state():
         'processed_frames': 0,
         'active_violations': {},
         'detected_faces': [],
-        'face_db_instance': None
+        'face_db_instance': None,
+        'video_recordings': {},  # track_id -> {'writer': VideoWriter, 'path': str}
+        'saved_videos': []  # List of saved video paths
     }
     
     for key, value in defaults.items():
@@ -143,7 +145,104 @@ def init_session_state():
             st.session_state[key] = value
 
 
-# ==================== ЗАГРУЗКА РЕСУРСОВ ====================
+# ==================== ЗАПИСЬ ВИДЕО ====================
+def start_violation_recording(track_id: int, violation_type: str, fps: float, frame_size: tuple):
+    """
+    Начать запись видео нарушения
+    
+    Args:
+        track_id: ID трека нарушения
+        violation_type: Тип нарушения
+        fps: FPS видео
+        frame_size: Размер кадра (width, height)
+        
+    Returns:
+        tuple: (VideoWriter, путь к файлу) или (None, None) при ошибке
+    """
+    try:
+        # Создаем директорию для видео
+        videos_dir = config.OUTPUT_DIR / "videos"
+        videos_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Генерируем имя файла
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        video_filename = f"{violation_type}_{track_id}_{timestamp}.mp4"
+        video_path = videos_dir / video_filename
+        
+        # Создаем VideoWriter
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        writer = cv2.VideoWriter(
+            str(video_path),
+            fourcc,
+            fps,
+            frame_size
+        )
+        
+        # Проверяем, успешно ли открылся
+        if not writer.isOpened():
+            print(f"Ошибка: не удалось открыть VideoWriter для {video_path}")
+            return None, None
+        
+        return writer, str(video_path)
+        
+    except Exception as e:
+        print(f"Ошибка создания VideoWriter: {e}")
+        return None, None
+
+
+def stop_violation_recording(track_id: int):
+    """
+    Остановить запись видео нарушения
+    
+    Args:
+        track_id: ID трека нарушения
+        
+    Returns:
+        str: Путь к сохраненному видео или None
+    """
+    if 'video_recordings' not in st.session_state:
+        return None
+        
+    if track_id not in st.session_state.video_recordings:
+        return None
+    
+    try:
+        recording = st.session_state.video_recordings[track_id]
+        writer = recording.get('writer')
+        video_path = recording.get('path')
+        
+        if writer is not None:
+            writer.release()
+        
+        del st.session_state.video_recordings[track_id]
+        
+        # Проверяем, что файл был создан и не пустой
+        if video_path and Path(video_path).exists():
+            file_size = Path(video_path).stat().st_size
+            if file_size > 1000:  # Минимальный размер файла
+                if 'saved_videos' not in st.session_state:
+                    st.session_state.saved_videos = []
+                st.session_state.saved_videos.append(video_path)
+                return video_path
+            else:
+                # Удаляем пустой или слишком маленький файл
+                Path(video_path).unlink(missing_ok=True)
+        
+        return None
+        
+    except Exception as e:
+        print(f"Ошибка остановки записи: {e}")
+        return None
+
+
+def cleanup_all_recordings():
+    """Остановить все активные записи"""
+    if 'video_recordings' not in st.session_state:
+        return
+    
+    track_ids = list(st.session_state.video_recordings.keys())
+    for track_id in track_ids:
+        stop_violation_recording(track_id)
 @st.cache_resource
 def load_model(model_path: str):
     """Загрузка модели YOLO"""
@@ -538,6 +637,8 @@ def run_detection(video_placeholder, settings: dict):
     # Информация о видео
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
     # Прогресс для видеофайлов
     if settings['source_type'] == "📁 Video File" and total_frames > 0:
@@ -674,23 +775,54 @@ def run_detection(video_placeholder, settings: dict):
                     if duration >= settings['duration_threshold'] and not violation['logged']:
                         violation['logged'] = True
                         
+                        # === НАЧАЛО ЗАПИСИ ВИДЕО ===
+                        if track_id not in st.session_state.video_recordings:
+                            writer, video_path = start_violation_recording(
+                                track_id, 
+                                det['class'],
+                                video_fps,
+                                (frame_width, frame_height)
+                            )
+                            if writer is not None:
+                                st.session_state.video_recordings[track_id] = {
+                                    'writer': writer,
+                                    'path': video_path
+                                }
+                                violation['video_path'] = video_path
+                        
                         log_entry = {
                             'id': len(st.session_state.violations_log) + 1,
                             'time': violation['start_time'].strftime("%H:%M:%S"),
                             'type': violation['type'],
                             'confidence': f"{violation['confidence']:.2f}",
                             'duration': f"{duration:.1f}s",
-                            'person': violation['person']
+                            'person': violation['person'],
+                            'video_path': violation.get('video_path', '')
                         }
                         
                         st.session_state.violations_log.append(log_entry)
                         st.session_state.total_violations += 1
                         st.session_state.violations_by_type[violation['type']] += 1
                         st.session_state.violations_by_person[violation['person']] += 1
+                    
+                    # === ЗАПИСЬ КАДРА В ВИДЕО ===
+                    if track_id in st.session_state.video_recordings:
+                        recording = st.session_state.video_recordings[track_id]
+                        writer = recording.get('writer')
+                        if writer is not None and writer.isOpened():
+                            writer.write(annotated_frame)
             
-            # Удаление завершённых нарушений
+            # Удаление завершённых нарушений и остановка записи
             finished = [tid for tid in st.session_state.active_violations if tid not in current_tracks]
             for tid in finished:
+                # Останавливаем запись видео для завершённого нарушения
+                saved_path = stop_violation_recording(tid)
+                if saved_path:
+                    # Обновляем путь к видео в логе
+                    for entry in st.session_state.violations_log:
+                        if 'video_path' in entry and entry['video_path'] and Path(entry['video_path']).stem.startswith(f"{st.session_state.active_violations[tid].get('class', '')}_{tid}_"):
+                            entry['video_path'] = saved_path
+                            break
                 del st.session_state.active_violations[tid]
             
             # === ОТОБРАЖЕНИЕ ===
@@ -716,6 +848,9 @@ def run_detection(video_placeholder, settings: dict):
         st.code(traceback.format_exc())
     
     finally:
+        # Останавливаем все активные записи видео
+        cleanup_all_recordings()
+        
         cap.release()
         if temp_file:
             try:
@@ -778,6 +913,37 @@ def render_reports_page():
                 for k, v in st.session_state.violations_by_person.items()
             ])
             st.bar_chart(chart_data.set_index("Person"))
+    
+    st.markdown("---")
+    
+    # Сохранённые видео
+    st.markdown("### 🎬 Saved Videos")
+    
+    # Проверяем наличие видео в папке output/videos
+    videos_dir = config.OUTPUT_DIR / "videos"
+    saved_videos = []
+    if videos_dir.exists():
+        saved_videos = list(videos_dir.glob("*.mp4"))
+    
+    if saved_videos:
+        st.success(f"📁 Found {len(saved_videos)} video(s) in {videos_dir}")
+        
+        for video_path in saved_videos:
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.text(f"📹 {video_path.name}")
+            with col2:
+                # Кнопка скачивания
+                with open(video_path, 'rb') as f:
+                    st.download_button(
+                        label="⬇️",
+                        data=f.read(),
+                        file_name=video_path.name,
+                        mime="video/mp4",
+                        key=f"download_{video_path.name}"
+                    )
+    else:
+        st.info(f"No videos saved yet. Videos will be saved to: {videos_dir}")
     
     st.markdown("---")
     
