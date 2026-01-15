@@ -328,7 +328,7 @@ class ViolationDetector:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         video_filename = f"{violation_type}_{track_id}_{timestamp}{config.VIDEO_EXTENSION}"
         video_path = config.OUTPUT_DIR / "videos" / video_filename
-        video_path.parent.mkdir(exist_ok=True)
+        video_path.parent.mkdir(parents=True, exist_ok=True)
         
         fourcc = cv2.VideoWriter_fourcc(*config.VIDEO_CODEC)
         writer = cv2.VideoWriter(
@@ -337,6 +337,11 @@ class ViolationDetector:
             self.fps,
             (self.frame_width, self.frame_height)
         )
+        
+        # Проверяем, что VideoWriter успешно открылся
+        if not writer.isOpened():
+            print(f"ОШИБКА: Не удалось открыть VideoWriter для {video_path}")
+            return None, None
         
         return writer, str(video_path)
     
@@ -413,7 +418,9 @@ class ViolationDetector:
                             "frames": []
                         }
                         
-                        self.current_recordings[track_id] = writer
+                        # Добавляем writer только если он успешно создан
+                        if writer is not None:
+                            self.current_recordings[track_id] = writer
                     
                     # Обновляем информацию
                     self.violations[track_id]["end_time"] = current_time
