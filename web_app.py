@@ -146,6 +146,9 @@ def init_session_state():
 
 
 # ==================== ЗАПИСЬ ВИДЕО ====================
+# Minimum file size in bytes to consider a video valid (helps filter out corrupt/empty files)
+MIN_VIDEO_FILE_SIZE = 1000
+
 def start_violation_recording(track_id: int, violation_type: str, fps: float, frame_size: tuple):
     """
     Начать запись видео нарушения
@@ -219,7 +222,7 @@ def stop_violation_recording(track_id: int):
         # Проверяем, что файл был создан и не пустой
         if video_path and Path(video_path).exists():
             file_size = Path(video_path).stat().st_size
-            if file_size > 1000:  # Минимальный размер файла
+            if file_size > MIN_VIDEO_FILE_SIZE:
                 if 'saved_videos' not in st.session_state:
                     st.session_state.saved_videos = []
                 st.session_state.saved_videos.append(video_path)
@@ -797,7 +800,8 @@ def run_detection(video_placeholder, settings: dict):
                             'confidence': f"{violation['confidence']:.2f}",
                             'duration': f"{duration:.1f}s",
                             'person': violation['person'],
-                            'video_path': violation.get('video_path', '')
+                            'video_path': violation.get('video_path', ''),
+                            'track_id': track_id  # Store track_id for later video path update
                         }
                         
                         st.session_state.violations_log.append(log_entry)
@@ -818,9 +822,9 @@ def run_detection(video_placeholder, settings: dict):
                 # Останавливаем запись видео для завершённого нарушения
                 saved_path = stop_violation_recording(tid)
                 if saved_path:
-                    # Обновляем путь к видео в логе
+                    # Обновляем путь к видео в логе по track_id
                     for entry in st.session_state.violations_log:
-                        if 'video_path' in entry and entry['video_path'] and Path(entry['video_path']).stem.startswith(f"{st.session_state.active_violations[tid].get('class', '')}_{tid}_"):
+                        if entry.get('track_id') == tid:
                             entry['video_path'] = saved_path
                             break
                 del st.session_state.active_violations[tid]
